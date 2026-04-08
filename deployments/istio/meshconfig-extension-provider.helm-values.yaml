@@ -1,0 +1,12 @@
+meshConfig:
+  extensionProviders:
+    # Important: this list replaces the current list during Helm values merge.
+    # Copy existing providers from the current Istio release and append oidc-auth-grpc.
+    - name: oidc-auth-grpc
+      envoyExtAuthzGrpc:
+        service: oidc-auth.auth.svc.cluster.local
+        port: 9090
+        timeout: 0.25s
+        failOpen: false
+        clearRouteCache: false
+        statusOnError: "503"

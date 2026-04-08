@@ -1,0 +1,17 @@
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: istio-ext-authz-oidc
+  namespace: istio-system
+spec:
+  meshConfig:
+    extensionProviders:
+      # Merge this provider with any existing providers in the current control-plane spec.
+      - name: oidc-auth-grpc
+        envoyExtAuthzGrpc:
+          service: oidc-auth.auth.svc.cluster.local
+          port: 9090
+          timeout: 0.25s
+          failOpen: false
+          clearRouteCache: false
+          statusOnError: "503"

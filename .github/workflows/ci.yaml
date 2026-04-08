@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Go test
+        run: go test ./...
+
+      - name: Build chart dependencies
+        run: helm dependency build deployments/charts/oidc-auth
+
+      - name: Helm lint main chart
+        run: >
+          helm lint deployments/charts/oidc-auth
+          --set authService.config.oidc.clientSecret=dummy
+          --set authService.image.repository=ghcr.io/colzphml/pkce_istio_external
+          --set authService.config.oidc.issuerURL=https://keycloak.example.com/realms/main
+          --set authService.config.oidc.clientID=oidc-auth
+          --set-string 'gateway.hostnames[0]=app.example.com'
+
+      - name: Helm lint integration chart
+        run: >
+          helm lint deployments/charts/oidc-auth-integration
+          --set-string 'protectedHosts[0]=app.example.com'
+
+      - name: Helm render main chart
+        run: >
+          helm template demo deployments/charts/oidc-auth --namespace auth
+          --set authService.config.oidc.clientSecret=dummy
+          --set authService.image.repository=ghcr.io/colzphml/pkce_istio_external
+          --set authService.config.oidc.issuerURL=https://keycloak.example.com/realms/main
+          --set authService.config.oidc.clientID=oidc-auth
+          --set-string 'gateway.hostnames[0]=app.example.com'
+          >/tmp/oidc-auth-render.yaml
+
+      - name: Helm render integration chart
+        run: >
+          helm template demo deployments/charts/oidc-auth-integration --namespace istio-ingress
+          --set-string 'protectedHosts[0]=app.example.com'
+          >/tmp/oidc-auth-integration-render.yaml
+
+      - name: Docker build smoke test
+        run: docker build --build-arg VERSION=ci --build-arg COMMIT=${GITHUB_SHA} --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) -t oidc-auth:ci .

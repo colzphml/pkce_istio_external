@@ -1,0 +1,14 @@
+{{- if .Values.istio.peerAuthentication.enabled }}
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ include "oidc-auth.fullname" . }}
+  labels:
+    {{- include "oidc-auth.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "oidc-auth.selectorLabels" . | nindent 6 }}
+  mtls:
+    mode: {{ .Values.istio.peerAuthentication.mode }}
+{{- end }}

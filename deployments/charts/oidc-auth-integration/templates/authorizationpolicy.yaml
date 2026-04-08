@@ -1,0 +1,30 @@
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "oidc-auth-integration.fullname" . }}
+  namespace: {{ .Values.gateway.namespace }}
+spec:
+  action: CUSTOM
+  provider:
+    name: {{ .Values.providerName }}
+  {{- if .Values.gateway.useTargetRef }}
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ .Values.gateway.name }}
+  {{- else }}
+  selector:
+    matchLabels:
+      {{- toYaml .Values.gateway.workloadSelectorLabels | nindent 6 }}
+  {{- end }}
+  rules:
+    - to:
+        - operation:
+            hosts:
+              {{- range .Values.protectedHosts }}
+              - {{ . | quote }}
+              {{- end }}
+            notPaths:
+              {{- range .Values.excludedPaths }}
+              - {{ . | quote }}
+              {{- end }}

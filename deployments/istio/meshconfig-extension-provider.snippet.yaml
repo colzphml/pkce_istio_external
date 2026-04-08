@@ -1,0 +1,9 @@
+extensionProviders:
+  - name: oidc-auth-grpc
+    envoyExtAuthzGrpc:
+      service: oidc-auth.auth.svc.cluster.local
+      port: 9090
+      timeout: 0.25s
+      failOpen: false
+      clearRouteCache: false
+      statusOnError: "503"

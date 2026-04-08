@@ -1,0 +1,17 @@
+{{- if .Values.istio.serviceEntry.enabled }}
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: {{ include "oidc-auth.fullname" . }}-oidc
+  labels:
+    {{- include "oidc-auth.labels" . | nindent 4 }}
+spec:
+  hosts:
+    {{- range .Values.istio.serviceEntry.hosts }}
+    - {{ . | quote }}
+    {{- end }}
+  location: MESH_EXTERNAL
+  resolution: DNS
+  ports:
+    {{- toYaml .Values.istio.serviceEntry.ports | nindent 4 }}
+{{- end }}

@@ -1,0 +1,13 @@
+apiVersion: v2
+name: oidc-auth
+description: OIDC auth-service, Redis and namespaced Istio/Gateway API resources for Istio ext_authz.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+dependencies:
+  - name: redis
+    alias: redis
+    version: 25.3.9
+    repository: oci://registry-1.docker.io/bitnamicharts
+    condition: redis.enabled

@@ -1,0 +1,190 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "oidc-auth.fullname" . }}
+  labels:
+    {{- include "oidc-auth.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.authService.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "oidc-auth.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "oidc-auth.selectorLabels" . | nindent 8 }}
+        {{- with .Values.authService.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/oidc-secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.authService.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "oidc-auth.serviceAccountName" . }}
+      {{- with .Values.authService.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: authservice
+          image: "{{ .Values.authService.image.repository }}:{{ default .Chart.AppVersion .Values.authService.image.tag }}"
+          imagePullPolicy: {{ .Values.authService.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.authService.service.httpPort }}
+              protocol: TCP
+            - name: grpc
+              containerPort: {{ .Values.authService.service.grpcPort }}
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: {{ .Values.authService.config.logLevel | quote }}
+            - name: SERVER_HTTP_ADDR
+              value: {{ printf ":%v" .Values.authService.service.httpPort | quote }}
+            - name: SERVER_GRPC_ADDR
+              value: {{ printf ":%v" .Values.authService.service.grpcPort | quote }}
+            - name: OIDC_ISSUER_URL
+              value: {{ .Values.authService.config.oidc.issuerURL | quote }}
+            - name: OIDC_CLIENT_ID
+              value: {{ .Values.authService.config.oidc.clientID | quote }}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "oidc-auth.oidcSecretName" . }}
+                  key: {{ .Values.authService.config.oidc.existingSecretKey | quote }}
+            - name: OIDC_SCOPES
+              value: {{ join "," .Values.authService.config.oidc.scopes | quote }}
+            - name: OIDC_CALLBACK_PATH
+              value: {{ .Values.authService.config.oidc.callbackPath | quote }}
+            - name: OIDC_LOGIN_PATH
+              value: {{ .Values.authService.config.oidc.loginPath | quote }}
+            - name: OIDC_LOGOUT_PATH
+              value: {{ .Values.authService.config.oidc.logoutPath | quote }}
+            - name: OIDC_POST_LOGOUT_PATH
+              value: {{ .Values.authService.config.oidc.postLogoutPath | quote }}
+            - name: OIDC_BACKCHANNEL_LOGOUT_PATH
+              value: {{ .Values.authService.config.oidc.backchannelPath | quote }}
+            - name: OIDC_LOGIN_STATE_TTL
+              value: {{ .Values.authService.config.oidc.loginStateTTL | quote }}
+            - name: OIDC_REFRESH_WINDOW
+              value: {{ .Values.authService.config.oidc.refreshWindow | quote }}
+            - name: OIDC_HTTP_TIMEOUT
+              value: {{ .Values.authService.config.oidc.httpTimeout | quote }}
+            - name: OIDC_CLOCK_SKEW
+              value: {{ .Values.authService.config.oidc.clockSkew | quote }}
+            - name: OIDC_ACCESS_TOKEN_AUDIENCES
+              value: {{ join "," .Values.authService.config.oidc.accessTokenAudiences | quote }}
+            - name: SESSION_ALLOWED_HOSTS
+              value: {{ join "," .Values.authService.config.session.allowedHosts | quote }}
+            - name: SESSION_COOKIE_NAME
+              value: {{ .Values.authService.config.session.cookieName | quote }}
+            - name: SESSION_COOKIE_DOMAIN
+              value: {{ .Values.authService.config.session.cookieDomain | quote }}
+            - name: SESSION_COOKIE_SECURE
+              value: {{ ternary "true" "false" .Values.authService.config.session.cookieSecure | quote }}
+            - name: SESSION_COOKIE_SAMESITE
+              value: {{ .Values.authService.config.session.cookieSameSite | quote }}
+            - name: SESSION_MAX_LIFETIME
+              value: {{ .Values.authService.config.session.maxLifetime | quote }}
+            - name: SESSION_MIN_ACCESS_TOKEN_TTL
+              value: {{ .Values.authService.config.session.minAccessTokenTTL | quote }}
+            - name: REDIS_MODE
+              value: {{ include "oidc-auth.redisMode" . | quote }}
+            - name: REDIS_ADDRESSES
+              value: {{ include "oidc-auth.redisAddresses" . | quote }}
+            - name: REDIS_MASTER_NAME
+              value: {{ default .Values.redis.sentinel.masterSet .Values.authService.config.redis.masterName | quote }}
+            - name: REDIS_DB
+              value: {{ .Values.authService.config.redis.db | quote }}
+            - name: REDIS_KEY_PREFIX
+              value: {{ .Values.authService.config.redis.keyPrefix | quote }}
+            - name: REDIS_DIAL_TIMEOUT
+              value: {{ .Values.authService.config.redis.dialTimeout | quote }}
+            - name: REDIS_READ_TIMEOUT
+              value: {{ .Values.authService.config.redis.readTimeout | quote }}
+            - name: REDIS_WRITE_TIMEOUT
+              value: {{ .Values.authService.config.redis.writeTimeout | quote }}
+            - name: REDIS_POOL_SIZE
+              value: {{ .Values.authService.config.redis.poolSize | quote }}
+            - name: REDIS_MIN_IDLE_CONNS
+              value: {{ .Values.authService.config.redis.minIdleConns | quote }}
+            - name: REDIS_REFRESH_LOCK_TTL
+              value: {{ .Values.authService.config.redis.refreshLockTTL | quote }}
+            - name: REDIS_REFRESH_LOCK_WAIT_TIMEOUT
+              value: {{ .Values.authService.config.redis.refreshLockWaitTimeout | quote }}
+            - name: REDIS_REFRESH_LOCK_POLL_INTERVAL
+              value: {{ .Values.authService.config.redis.refreshLockPollInterval | quote }}
+            - name: REDIS_TLS_ENABLED
+              value: {{ ternary "true" "false" .Values.authService.config.redis.tls.enabled | quote }}
+            - name: REDIS_TLS_SERVER_NAME
+              value: {{ include "oidc-auth.redisTLSServerName" . | quote }}
+            - name: REDIS_TLS_INSECURE_SKIP_VERIFY
+              value: {{ ternary "true" "false" .Values.authService.config.redis.tls.insecureSkipVerify | quote }}
+            - name: REDIS_TLS_CA_FILE
+              value: {{ printf "/var/run/redis-tls/%s" .Values.authService.config.redis.tls.caSecretKey | quote }}
+            {{- if .Values.authService.config.redis.username }}
+            - name: REDIS_USERNAME
+              value: {{ .Values.authService.config.redis.username | quote }}
+            {{- end }}
+            {{- if eq (include "oidc-auth.redisMode" .) "sentinel" }}
+            {{- if .Values.authService.config.redis.sentinelUsername }}
+            - name: REDIS_SENTINEL_USERNAME
+              value: {{ .Values.authService.config.redis.sentinelUsername | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if include "oidc-auth.redisPasswordSecretName" . }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "oidc-auth.redisPasswordSecretName" . }}
+                  key: {{ include "oidc-auth.redisPasswordSecretKey" . | quote }}
+            {{- else if .Values.authService.config.redis.password }}
+            - name: REDIS_PASSWORD
+              value: {{ .Values.authService.config.redis.password | quote }}
+            {{- end }}
+            {{- if eq (include "oidc-auth.redisMode" .) "sentinel" }}
+            {{- if include "oidc-auth.redisSentinelPasswordSecretName" . }}
+            - name: REDIS_SENTINEL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "oidc-auth.redisSentinelPasswordSecretName" . }}
+                  key: {{ include "oidc-auth.redisSentinelPasswordSecretKey" . | quote }}
+            {{- else if .Values.authService.config.redis.sentinelPassword }}
+            - name: REDIS_SENTINEL_PASSWORD
+              value: {{ .Values.authService.config.redis.sentinelPassword | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.authService.config.redis.tls.useClientCert }}
+            - name: REDIS_TLS_CERT_FILE
+              value: {{ printf "/var/run/redis-tls/%s" .Values.authService.config.redis.tls.certSecretKey | quote }}
+            - name: REDIS_TLS_KEY_FILE
+              value: {{ printf "/var/run/redis-tls/%s" .Values.authService.config.redis.tls.keySecretKey | quote }}
+            {{- end }}
+          volumeMounts:
+            {{- if include "oidc-auth.redisTLSSecretName" . }}
+            - name: redis-tls
+              mountPath: /var/run/redis-tls
+              readOnly: true
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.authService.resources | nindent 12 }}
+      volumes:
+        {{- if include "oidc-auth.redisTLSSecretName" . }}
+        - name: redis-tls
+          secret:
+            secretName: {{ include "oidc-auth.redisTLSSecretName" . }}
+        {{- end }}

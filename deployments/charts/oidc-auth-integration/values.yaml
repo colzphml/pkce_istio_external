@@ -1,0 +1,18 @@
+nameOverride: ""
+fullnameOverride: ""
+
+providerName: oidc-auth-grpc
+
+gateway:
+  namespace: istio-ingress
+  name: shared-gateway
+  useTargetRef: true
+  workloadSelectorLabels:
+    gateway.networking.k8s.io/gateway-name: shared-gateway
+
+protectedHosts:
+  - app.example.com
+
+excludedPaths:
+  - /_auth
+  - /_auth/*

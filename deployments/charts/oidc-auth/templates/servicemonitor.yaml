@@ -1,0 +1,20 @@
+{{- if .Values.authService.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "oidc-auth.fullname" . }}
+  labels:
+    {{- include "oidc-auth.labels" . | nindent 4 }}
+    {{- with .Values.authService.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "oidc-auth.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.authService.metrics.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.authService.metrics.serviceMonitor.scrapeTimeout }}
+{{- end }}

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: oidc-auth-integration
+description: Gateway namespace AuthorizationPolicy integration for OIDC ext_authz.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

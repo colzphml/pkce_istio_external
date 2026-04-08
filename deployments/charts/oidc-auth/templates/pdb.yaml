@@ -1,0 +1,13 @@
+{{- if .Values.authService.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "oidc-auth.fullname" . }}
+  labels:
+    {{- include "oidc-auth.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.authService.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "oidc-auth.selectorLabels" . | nindent 6 }}
+{{- end }}
