@@ -23,8 +23,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Setup Helm
-        uses: azure/setup-helm@v4
+      - name: Install Helm
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm version --short
 
       - name: Go test
         run: go test ./...
