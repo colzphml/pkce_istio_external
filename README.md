@@ -66,6 +66,8 @@ This split is intentional. A single chart that directly mutates a separately man
 
 - CI runs `go test ./...`, `helm dependency build`, `helm lint` and `helm template`.
 - Image publish workflow builds `linux/amd64` and `linux/arm64` and pushes to `ghcr.io/colzphml/pkce_istio_external`.
+- Pushes to `main` publish moving tags `edge` and `sha-<commit>`.
+- Git tags in the form `vX.Y.Z` publish release tags `X.Y.Z`, `X.Y` and `latest`.
 - Build metadata is embedded into the binary and exposed via `/versionz`.
 - Example runtime environment is in [.env.example](/Users/colz/gitrepos/envs/pkce_istio_external/.env.example).
 
