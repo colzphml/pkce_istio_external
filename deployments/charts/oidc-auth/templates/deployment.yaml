@@ -54,6 +54,8 @@ spec:
                 secretKeyRef:
                   name: {{ include "oidc-auth.oidcSecretName" . }}
                   key: {{ .Values.authService.config.oidc.existingSecretKey | quote }}
+            - name: OIDC_PUBLIC_ORIGIN
+              value: {{ .Values.authService.config.oidc.publicOrigin | quote }}
             - name: OIDC_SCOPES
               value: {{ join "," .Values.authService.config.oidc.scopes | quote }}
             - name: OIDC_CALLBACK_PATH

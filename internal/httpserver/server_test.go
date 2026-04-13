@@ -76,6 +76,55 @@ func TestOriginFromRequest_AllowedWildcard(t *testing.T) {
 	}
 }
 
+func TestOriginFromRequest_PreservesNonDefaultPort(t *testing.T) {
+	cfg := baseTestConfig()
+	cfg.Session.AllowedHosts = []string{"localhost"}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Forwarded-Proto", "http")
+	r.Header.Set("X-Forwarded-Host", "localhost:8080")
+
+	got, err := originFromRequest(r, cfg)
+	if err != nil {
+		t.Fatalf("originFromRequest() error = %v", err)
+	}
+	if got != "http://localhost:8080" {
+		t.Fatalf("originFromRequest() = %q, want http://localhost:8080", got)
+	}
+}
+
+func TestOriginFromRequest_UsesForwardedPortWhenHostOmitsIt(t *testing.T) {
+	cfg := baseTestConfig()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Forwarded-Proto", "https")
+	r.Header.Set("X-Forwarded-Host", "app.example.com")
+	r.Header.Set("X-Forwarded-Port", "8443")
+
+	got, err := originFromRequest(r, cfg)
+	if err != nil {
+		t.Fatalf("originFromRequest() error = %v", err)
+	}
+	if got != "https://app.example.com:8443" {
+		t.Fatalf("originFromRequest() = %q, want https://app.example.com:8443", got)
+	}
+}
+
+func TestOriginFromRequest_PublicOriginOverride(t *testing.T) {
+	cfg := baseTestConfig()
+	cfg.OIDC.PublicOrigin = "https://login.example.com:8443/"
+	cfg.Session.AllowedHosts = []string{"app.example.com", "login.example.com"}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Forwarded-Proto", "https")
+	r.Header.Set("X-Forwarded-Host", "app.example.com")
+
+	got, err := originFromRequest(r, cfg)
+	if err != nil {
+		t.Fatalf("originFromRequest() error = %v", err)
+	}
+	if got != "https://login.example.com:8443" {
+		t.Fatalf("originFromRequest() = %q, want https://login.example.com:8443", got)
+	}
+}
+
 // ---- normalizeReturnPath ----
 
 func TestNormalizeReturnPath(t *testing.T) {
@@ -136,6 +185,49 @@ func TestHandleLogin_DisallowedHost_Returns403(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("handleLogin() status = %d, want 403 for disallowed host", rec.Code)
+	}
+}
+
+func TestHandleLogin_PreservesCustomPortInRedirectURI(t *testing.T) {
+	cfg := baseTestConfig()
+	cfg.Session.AllowedHosts = []string{"localhost"}
+	fakeOIDC := &testutil.FakeOIDCClient{}
+	handler := buildServer(t, cfg, fakeOIDC, testutil.NewMemoryStore())
+
+	req := httptest.NewRequest(http.MethodGet, "/_auth/login", nil)
+	req.Header.Set("X-Forwarded-Proto", "http")
+	req.Header.Set("X-Forwarded-Host", "localhost:8080")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("handleLogin() status = %d, want 302", rec.Code)
+	}
+	if fakeOIDC.LastAuthRedirectURL != "http://localhost:8080/_auth/callback" {
+		t.Fatalf("handleLogin() redirect_uri = %q, want http://localhost:8080/_auth/callback", fakeOIDC.LastAuthRedirectURL)
+	}
+}
+
+func TestHandleLogin_UsesConfiguredPublicOriginInRedirectURI(t *testing.T) {
+	cfg := baseTestConfig()
+	cfg.OIDC.PublicOrigin = "https://login.example.com:8443"
+	cfg.Session.AllowedHosts = []string{"app.example.com", "login.example.com"}
+	fakeOIDC := &testutil.FakeOIDCClient{}
+	handler := buildServer(t, cfg, fakeOIDC, testutil.NewMemoryStore())
+
+	req := httptest.NewRequest(http.MethodGet, "/_auth/login", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "app.example.com")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("handleLogin() status = %d, want 302", rec.Code)
+	}
+	if fakeOIDC.LastAuthRedirectURL != "https://login.example.com:8443/_auth/callback" {
+		t.Fatalf("handleLogin() redirect_uri = %q, want https://login.example.com:8443/_auth/callback", fakeOIDC.LastAuthRedirectURL)
 	}
 }
 

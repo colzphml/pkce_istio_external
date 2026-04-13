@@ -223,9 +223,15 @@ func originAllowed(rawOrigin string, cfg config.Config) bool {
 }
 
 func originFromRequest(r *http.Request, cfg config.Config) (string, error) {
-	scheme := headerOrDefault(r.Header, "X-Forwarded-Proto", "http")
-	host := headerOrDefault(r.Header, "X-Forwarded-Host", r.Host)
-	host = netutil.HostOnly(host)
+	scheme := strings.ToLower(netutil.FirstForwardedValue(headerOrDefault(r.Header, "X-Forwarded-Proto", "http")))
+	authority, host, err := netutil.NormalizeAuthority(
+		headerOrDefault(r.Header, "X-Forwarded-Host", r.Host),
+		scheme,
+		r.Header.Get("X-Forwarded-Port"),
+	)
+	if err != nil {
+		return "", err
+	}
 	if host == "" {
 		return "", errors.New("missing host")
 	}
@@ -242,7 +248,18 @@ func originFromRequest(r *http.Request, cfg config.Config) (string, error) {
 		return "", session.ErrInvalidHost
 	}
 
-	return scheme + "://" + host, nil
+	if strings.TrimSpace(cfg.OIDC.PublicOrigin) != "" {
+		origin, err := netutil.NormalizeOrigin(cfg.OIDC.PublicOrigin)
+		if err != nil {
+			return "", err
+		}
+		if !originAllowed(origin, cfg) {
+			return "", session.ErrInvalidHost
+		}
+		return origin, nil
+	}
+
+	return scheme + "://" + authority, nil
 }
 
 func normalizeReturnPath(raw string) string {
@@ -265,4 +282,3 @@ func headerOrDefault(headers http.Header, key, fallback string) string {
 	}
 	return value
 }
-

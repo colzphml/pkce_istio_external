@@ -56,6 +56,10 @@ authService:
       issuerURL: https://keycloak.example.com/realms/main
       clientID: oidc-auth
       clientSecret: ""
+      # publicOrigin optionally pins the externally visible origin used for
+      # OIDC redirect_uri and logout redirects, including a custom port.
+      # Leave empty to derive it from forwarded headers.
+      publicOrigin: ""
       existingSecret: ""
       existingSecretKey: client-secret
       scopes:

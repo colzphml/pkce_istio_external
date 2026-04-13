@@ -5,10 +5,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/colzphml/pkce_istio_external/internal/netutil"
 )
 
 type Config struct {
@@ -42,6 +45,7 @@ type OIDCConfig struct {
 	IssuerURL            string
 	ClientID             string
 	ClientSecret         string
+	PublicOrigin         string
 	Scopes               []string
 	CallbackPath         string
 	LogoutPath           string
@@ -189,6 +193,7 @@ func LoadFromEnv() (Config, error) {
 			IssuerURL:                 envRequired("OIDC_ISSUER_URL"),
 			ClientID:                  envRequired("OIDC_CLIENT_ID"),
 			ClientSecret:              envRequired("OIDC_CLIENT_SECRET"),
+			PublicOrigin:              envString("OIDC_PUBLIC_ORIGIN", ""),
 			Scopes:                    envCSV("OIDC_SCOPES", []string{"openid", "profile", "email", "offline_access"}),
 			CallbackPath:              envString("OIDC_CALLBACK_PATH", "/_auth/callback"),
 			LogoutPath:                envString("OIDC_LOGOUT_PATH", "/_auth/logout"),
@@ -254,6 +259,13 @@ func LoadFromEnv() (Config, error) {
 	if len(cfg.OIDC.AccessTokenAudiences) == 0 && cfg.OIDC.ClientID != "" {
 		cfg.OIDC.AccessTokenAudiences = []string{cfg.OIDC.ClientID}
 	}
+	if strings.TrimSpace(cfg.OIDC.PublicOrigin) != "" {
+		normalized, err := netutil.NormalizeOrigin(cfg.OIDC.PublicOrigin)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid OIDC_PUBLIC_ORIGIN=%q: %w", cfg.OIDC.PublicOrigin, err)
+		}
+		cfg.OIDC.PublicOrigin = normalized
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -273,6 +285,14 @@ func (c Config) Validate() error {
 	}
 	if c.OIDC.ClientSecret == "" {
 		errs = append(errs, errors.New("OIDC_CLIENT_SECRET is required"))
+	}
+	if strings.TrimSpace(c.OIDC.PublicOrigin) != "" {
+		normalized, err := netutil.NormalizeOrigin(c.OIDC.PublicOrigin)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("OIDC_PUBLIC_ORIGIN is invalid: %w", err))
+		} else if len(c.Session.AllowedHosts) > 0 && !configHostAllowed(normalized, c.Session.AllowedHosts) {
+			errs = append(errs, errors.New("OIDC_PUBLIC_ORIGIN host must match SESSION_ALLOWED_HOSTS"))
+		}
 	}
 	if len(c.Redis.Addresses) == 0 {
 		errs = append(errs, errors.New("REDIS_ADDRESSES must not be empty"))
@@ -301,6 +321,27 @@ func (c Config) Warnings() []string {
 		warnings = append(warnings, "REDIS_TLS_INSECURE_SKIP_VERIFY is enabled: TLS certificate verification is disabled; do not use in production")
 	}
 	return warnings
+}
+
+func configHostAllowed(origin string, allowedHosts []string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := netutil.HostOnly(parsed.Host)
+	if len(allowedHosts) == 0 {
+		return true
+	}
+	for _, allowed := range allowedHosts {
+		allowed = netutil.HostOnly(allowed)
+		if allowed == host {
+			return true
+		}
+		if strings.HasPrefix(allowed, "*.") && strings.HasSuffix(host, strings.TrimPrefix(allowed, "*")) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c RedisConfig) TLSConfig() (*tls.Config, error) {

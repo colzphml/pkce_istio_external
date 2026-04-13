@@ -93,6 +93,32 @@ func TestWarnings_NoWarningsOnCleanConfig(t *testing.T) {
 	}
 }
 
+func TestValidate_PublicOrigin(t *testing.T) {
+	t.Run("valid custom port", func(t *testing.T) {
+		cfg := validTestConfig()
+		cfg.Session.AllowedHosts = []string{"app.example.com"}
+		cfg.OIDC.PublicOrigin = "https://app.example.com:8443"
+
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() error = %v, want nil", err)
+		}
+	})
+
+	t.Run("host must be allowed", func(t *testing.T) {
+		cfg := validTestConfig()
+		cfg.Session.AllowedHosts = []string{"app.example.com"}
+		cfg.OIDC.PublicOrigin = "https://login.example.com:8443"
+
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("Validate() = nil, want error for disallowed public origin host")
+		}
+		if msg := err.Error(); !contains(msg, "OIDC_PUBLIC_ORIGIN host must match SESSION_ALLOWED_HOSTS") {
+			t.Fatalf("Validate() error = %q, want public origin host mismatch", msg)
+		}
+	})
+}
+
 func TestConfigBuilder_InvalidDuration(t *testing.T) {
 	t.Setenv("SERVER_READ_TIMEOUT", "not-a-duration")
 	t.Setenv("OIDC_ISSUER_URL", "https://keycloak.example.com/realms/test")
@@ -168,6 +194,21 @@ func TestEnvCSV(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLoadFromEnv_NormalizesPublicOrigin(t *testing.T) {
+	t.Setenv("OIDC_ISSUER_URL", "https://keycloak.example.com/realms/test")
+	t.Setenv("OIDC_CLIENT_ID", "test-client")
+	t.Setenv("OIDC_CLIENT_SECRET", "test-secret")
+	t.Setenv("OIDC_PUBLIC_ORIGIN", "https://app.example.com:443/")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.OIDC.PublicOrigin != "https://app.example.com" {
+		t.Fatalf("LoadFromEnv() public origin = %q, want https://app.example.com", cfg.OIDC.PublicOrigin)
 	}
 }
 
