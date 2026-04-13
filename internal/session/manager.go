@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/colzphml/pkce_istio_external/internal/clock"
 	"github.com/colzphml/pkce_istio_external/internal/config"
 	"github.com/colzphml/pkce_istio_external/internal/model"
+	"github.com/colzphml/pkce_istio_external/internal/netutil"
 	"github.com/colzphml/pkce_istio_external/internal/oidc"
 	"github.com/colzphml/pkce_istio_external/internal/store"
 	"github.com/colzphml/pkce_istio_external/internal/telemetry"
@@ -295,9 +295,7 @@ func (m *Manager) EnsureFresh(ctx context.Context, sess *model.Session) (*model.
 			updated.IDToken = tokenSet.IDToken
 		}
 		updated.ExpiresAt = m.sessionExpiry(updated.CreatedAt, tokenSet)
-		if updated.ExpiresAt.Before(sess.ExpiresAt) {
-			updated.ExpiresAt = updated.ExpiresAt
-		} else {
+		if updated.ExpiresAt.After(sess.ExpiresAt) {
 			updated.ExpiresAt = sess.ExpiresAt
 		}
 
@@ -433,13 +431,13 @@ func (m *Manager) validateOrigin(origin string) error {
 }
 
 func (m *Manager) hostAllowed(host string) bool {
-	host = hostOnly(host)
+	host = netutil.HostOnly(host)
 	if len(m.cfg.Session.AllowedHosts) == 0 {
 		return true
 	}
 
 	for _, allowed := range m.cfg.Session.AllowedHosts {
-		allowed = hostOnly(allowed)
+		allowed = netutil.HostOnly(allowed)
 		if allowed == host {
 			return true
 		}
@@ -448,21 +446,6 @@ func (m *Manager) hostAllowed(host string) bool {
 		}
 	}
 	return false
-}
-
-func hostOnly(hostport string) string {
-	hostport = strings.TrimSpace(strings.Split(hostport, ",")[0])
-	if strings.HasPrefix(hostport, "[") {
-		if parsedHost, _, err := net.SplitHostPort(hostport); err == nil {
-			return parsedHost
-		}
-	}
-	if strings.Count(hostport, ":") == 1 {
-		if parsedHost, _, err := net.SplitHostPort(hostport); err == nil {
-			return parsedHost
-		}
-	}
-	return hostport
 }
 
 func sameSiteMode(value string) http.SameSite {

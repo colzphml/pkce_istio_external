@@ -62,6 +62,12 @@ docs/                               architecture and integration notes
 
 This split is intentional. A single chart that directly mutates a separately managed `istiod` release is not production-friendly because it couples app lifecycle and control-plane lifecycle, and `meshConfig.extensionProviders` is a list that must be merged carefully with existing providers.
 
+## External Origin
+
+By default the service derives its browser-facing origin from forwarded headers and preserves non-default external ports such as `:8080` or `:8443`.
+
+If your gateway/proxy does not forward the canonical external host/port reliably, set `OIDC_PUBLIC_ORIGIN` or Helm `authService.config.oidc.publicOrigin` to the exact external origin that should be used for `redirect_uri` and post-logout redirects.
+
 ## Build And Publish
 
 - CI runs `go test ./...`, `helm dependency build`, `helm lint` and `helm template`.

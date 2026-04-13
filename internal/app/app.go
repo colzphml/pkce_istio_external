@@ -28,6 +28,10 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	buildInfo := version.Current()
 	logger.Info("starting oidc auth service", "version", buildInfo.Version, "commit", buildInfo.Commit, "build_date", buildInfo.BuildDate)
 
+	for _, warning := range cfg.Warnings() {
+		logger.Warn(warning)
+	}
+
 	metrics := telemetry.New()
 	clk := clock.RealClock{}
 
@@ -40,13 +44,15 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 
 	oidcClient, err := oidc.New(ctx, oidc.Config{
-		IssuerURL:            cfg.OIDC.IssuerURL,
-		ClientID:             cfg.OIDC.ClientID,
-		ClientSecret:         cfg.OIDC.ClientSecret,
-		Scopes:               cfg.OIDC.Scopes,
-		HTTPTimeout:          cfg.OIDC.HTTPTimeout,
-		ClockSkew:            cfg.OIDC.ClockSkew,
-		AccessTokenAudiences: cfg.OIDC.AccessTokenAudiences,
+		IssuerURL:                 cfg.OIDC.IssuerURL,
+		ClientID:                  cfg.OIDC.ClientID,
+		ClientSecret:              cfg.OIDC.ClientSecret,
+		Scopes:                    cfg.OIDC.Scopes,
+		HTTPTimeout:               cfg.OIDC.HTTPTimeout,
+		ClockSkew:                 cfg.OIDC.ClockSkew,
+		AccessTokenAudiences:      cfg.OIDC.AccessTokenAudiences,
+		CircuitBreakerMaxFailures: cfg.OIDC.CircuitBreakerMaxFailures,
+		CircuitBreakerTimeout:     cfg.OIDC.CircuitBreakerTimeout,
 	})
 	if err != nil {
 		return fmt.Errorf("create oidc client: %w", err)
