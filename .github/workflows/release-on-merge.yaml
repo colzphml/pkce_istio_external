@@ -125,6 +125,7 @@ jobs:
         id: builddate
         run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"${GITHUB_OUTPUT}"
 
+      # Tag pushes created with GITHUB_TOKEN do not fan out to push-triggered workflows.
       - name: Build and push release image
         if: steps.label.outputs.skip != 'true'
         uses: docker/build-push-action@v6
