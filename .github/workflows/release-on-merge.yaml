@@ -1,0 +1,158 @@
+name: release-on-merge
+
+on:
+  pull_request_target:
+    types:
+      - closed
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: release-on-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Determine release label
+        id: label
+        env:
+          LABELS_JSON: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          mapfile -t release_labels < <(jq -r '.[]' <<<"${LABELS_JSON}" | grep '^release:' || true)
+
+          if [ "${#release_labels[@]}" -eq 0 ]; then
+            echo "skip=true" >>"${GITHUB_OUTPUT}"
+            echo "No release label found; skipping release tagging."
+            exit 0
+          fi
+
+          if [ "${#release_labels[@]}" -ne 1 ]; then
+            echo "Expected exactly one release label, got: ${release_labels[*]}" >&2
+            exit 1
+          fi
+
+          case "${release_labels[0]}" in
+            release:patch|release:minor|release:major)
+              echo "bump=${release_labels[0]#release:}" >>"${GITHUB_OUTPUT}"
+              ;;
+            *)
+              echo "Unsupported release label: ${release_labels[0]}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout merge commit
+        if: steps.label.outputs.skip != 'true'
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Fetch tags
+        if: steps.label.outputs.skip != 'true'
+        run: git fetch --force --tags origin
+
+      - name: Compute next version
+        if: steps.label.outputs.skip != 'true'
+        id: version
+        env:
+          BUMP: ${{ steps.label.outputs.bump }}
+        run: |
+          latest_tag="$(git tag -l 'v[0-9]*' | sort -V | tail -n1)"
+          if [ -z "${latest_tag}" ]; then
+            latest_tag="v0.0.0"
+          fi
+
+          version="${latest_tag#v}"
+          IFS=. read -r major minor patch <<<"${version}"
+
+          case "${BUMP}" in
+            patch)
+              patch=$((patch + 1))
+              ;;
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            major)
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            *)
+              echo "Unknown bump type: ${BUMP}" >&2
+              exit 1
+              ;;
+          esac
+
+          next_tag="v${major}.${minor}.${patch}"
+          if git rev-parse -q --verify "refs/tags/${next_tag}" >/dev/null; then
+            echo "Tag already exists: ${next_tag}" >&2
+            exit 1
+          fi
+
+          echo "next_tag=${next_tag}" >>"${GITHUB_OUTPUT}"
+          echo "version=${next_tag#v}" >>"${GITHUB_OUTPUT}"
+          echo "minor_tag=${major}.${minor}" >>"${GITHUB_OUTPUT}"
+
+      - name: Setup QEMU
+        if: steps.label.outputs.skip != 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Buildx
+        if: steps.label.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        if: steps.label.outputs.skip != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute build date
+        if: steps.label.outputs.skip != 'true'
+        id: builddate
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"${GITHUB_OUTPUT}"
+
+      # Tag pushes created with GITHUB_TOKEN do not fan out to push-triggered workflows.
+      - name: Build and push release image
+        if: steps.label.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.minor_tag }}
+            ghcr.io/${{ github.repository }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.title=pkce_istio_external
+            org.opencontainers.image.description=OIDC ext_authz service for Istio Gateway
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.event.pull_request.merge_commit_sha }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ github.event.pull_request.merge_commit_sha }}
+            BUILD_DATE=${{ steps.builddate.outputs.value }}
+
+      - name: Create git tag
+        if: steps.label.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.next_tag }}" "${{ github.event.pull_request.merge_commit_sha }}" -m "Release ${{ steps.version.outputs.next_tag }}"
+          git push origin "${{ steps.version.outputs.next_tag }}"

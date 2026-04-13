@@ -51,11 +51,11 @@ func TestAudienceAllowed(t *testing.T) {
 		want    bool
 	}{
 		{[]string{"a"}, []string{}, true},         // empty allowed list → all OK
-		{[]string{"a"}, nil, true},                 // nil allowed list → all OK
-		{[]string{"a"}, []string{"a"}, true},       // match
-		{[]string{"a"}, []string{"b"}, false},      // no match
-		{[]string{"a", "b"}, []string{"b"}, true},  // one of many matches
-		{[]string{}, []string{"a"}, false},          // empty got, non-empty allowed
+		{[]string{"a"}, nil, true},                // nil allowed list → all OK
+		{[]string{"a"}, []string{"a"}, true},      // match
+		{[]string{"a"}, []string{"b"}, false},     // no match
+		{[]string{"a", "b"}, []string{"b"}, true}, // one of many matches
+		{[]string{}, []string{"a"}, false},        // empty got, non-empty allowed
 	}
 
 	for _, tc := range tests {
@@ -117,7 +117,7 @@ func TestTokenSetFromOAuth2_Float64RefreshExpiry(t *testing.T) {
 		RefreshToken: "refresh",
 		Expiry:       time.Now().Add(30 * time.Minute),
 	}).WithExtra(map[string]interface{}{
-		"id_token":          "idtoken",
+		"id_token":           "idtoken",
 		"refresh_expires_in": float64(3600),
 	})
 	set, _, err := tokenSetFromOAuth2(token)
@@ -139,7 +139,7 @@ func TestTokenSetFromOAuth2_JSONNumberRefreshExpiry(t *testing.T) {
 		RefreshToken: "refresh",
 		Expiry:       time.Now().Add(30 * time.Minute),
 	}).WithExtra(map[string]interface{}{
-		"id_token":          "idtoken",
+		"id_token":           "idtoken",
 		"refresh_expires_in": json.Number("1800"),
 	})
 	set, _, err := tokenSetFromOAuth2(token)
@@ -148,6 +148,38 @@ func TestTokenSetFromOAuth2_JSONNumberRefreshExpiry(t *testing.T) {
 	}
 	if set.RefreshTokenExpiry == nil {
 		t.Fatal("RefreshTokenExpiry = nil, want non-nil")
+	}
+}
+
+func TestTokenSetFromOAuth2_NonPositiveRefreshExpiryIgnored(t *testing.T) {
+	tests := []struct {
+		name  string
+		value interface{}
+	}{
+		{name: "float64 zero", value: float64(0)},
+		{name: "int64 zero", value: int64(0)},
+		{name: "json number zero", value: json.Number("0")},
+		{name: "negative", value: int64(-1)},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			token := (&oauth2.Token{
+				AccessToken:  "access",
+				RefreshToken: "refresh",
+				Expiry:       time.Now().Add(30 * time.Minute),
+			}).WithExtra(map[string]interface{}{
+				"id_token":           "idtoken",
+				"refresh_expires_in": tc.value,
+			})
+			set, _, err := tokenSetFromOAuth2(token)
+			if err != nil {
+				t.Fatalf("tokenSetFromOAuth2() error = %v", err)
+			}
+			if set.RefreshTokenExpiry != nil {
+				t.Fatalf("RefreshTokenExpiry = %v, want nil", set.RefreshTokenExpiry)
+			}
+		})
 	}
 }
 
