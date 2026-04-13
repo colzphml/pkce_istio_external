@@ -13,6 +13,8 @@ import (
 
 	coreoidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
+
+	"github.com/colzphml/pkce_istio_external/internal/circuitbreaker"
 )
 
 var ErrInvalidGrant = errors.New("invalid_grant")
@@ -25,6 +27,12 @@ type Config struct {
 	HTTPTimeout          time.Duration
 	ClockSkew            time.Duration
 	AccessTokenAudiences []string
+	// CircuitBreakerMaxFailures is the number of consecutive failures that
+	// open the circuit. Zero disables the circuit breaker.
+	CircuitBreakerMaxFailures int
+	// CircuitBreakerTimeout is how long the circuit stays open before a
+	// half-open probe is allowed.
+	CircuitBreakerTimeout time.Duration
 }
 
 type Client struct {
@@ -111,8 +119,45 @@ func (a *audienceClaim) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// cbTransport wraps an http.RoundTripper with a circuit breaker.
+// HTTP 5xx responses count as failures.
+type cbTransport struct {
+	base http.RoundTripper
+	cb   *circuitbreaker.CircuitBreaker
+}
+
+func (t *cbTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	var resp *http.Response
+	err := t.cb.Execute(func() error {
+		var innerErr error
+		resp, innerErr = t.base.RoundTrip(req)
+		if innerErr != nil {
+			return innerErr
+		}
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return fmt.Errorf("upstream returned %d", resp.StatusCode)
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, circuitbreaker.ErrOpen) {
+			return nil, fmt.Errorf("oidc provider unavailable (circuit open): %w", err)
+		}
+		return resp, err
+	}
+	return resp, nil
+}
+
 func New(ctx context.Context, cfg Config) (*Client, error) {
-	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
+	var transport http.RoundTripper = http.DefaultTransport
+	if cfg.CircuitBreakerMaxFailures > 0 {
+		cb := circuitbreaker.New(cfg.CircuitBreakerMaxFailures, cfg.CircuitBreakerTimeout, nil)
+		transport = &cbTransport{base: http.DefaultTransport, cb: cb}
+	}
+	httpClient := &http.Client{
+		Timeout:   cfg.HTTPTimeout,
+		Transport: transport,
+	}
 	ctx = coreoidc.ClientContext(ctx, httpClient)
 
 	provider, err := coreoidc.NewProvider(ctx, cfg.IssuerURL)

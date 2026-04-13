@@ -73,6 +73,18 @@ authService:
       httpTimeout: 5s
       clockSkew: 30s
       accessTokenAudiences: []
+      # circuitBreaker controls the Keycloak HTTP circuit breaker.
+      # Set maxFailures to 0 to disable.
+      circuitBreaker:
+        maxFailures: 5
+        timeout: 30s
+
+    server:
+      # rateLimitRPS is the per-IP request rate (requests/second) allowed on
+      # /_auth/* endpoints. Set to 0 to disable rate limiting.
+      rateLimitRPS: 10
+      # rateLimitBurst is the maximum burst size for the per-IP rate limiter.
+      rateLimitBurst: 20
 
     session:
       allowedHosts:

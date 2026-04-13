@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/colzphml/pkce_istio_external/internal/config"
 	"github.com/colzphml/pkce_istio_external/internal/model"
+	"github.com/colzphml/pkce_istio_external/internal/netutil"
 	"github.com/colzphml/pkce_istio_external/internal/session"
 	"github.com/colzphml/pkce_istio_external/internal/telemetry"
 )
@@ -195,12 +195,12 @@ func headerValueOption(key, value string) *corev3.HeaderValueOption {
 }
 
 func (s *Server) hostAllowed(host string) bool {
-	host = hostOnly(host)
+	host = netutil.HostOnly(host)
 	if len(s.cfg.Session.AllowedHosts) == 0 {
 		return true
 	}
 	for _, allowed := range s.cfg.Session.AllowedHosts {
-		allowed = hostOnly(allowed)
+		allowed = netutil.HostOnly(allowed)
 		if allowed == host {
 			return true
 		}
@@ -218,21 +218,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func hostOnly(hostport string) string {
-	hostport = strings.TrimSpace(strings.Split(hostport, ",")[0])
-	if strings.HasPrefix(hostport, "[") {
-		if parsedHost, _, err := net.SplitHostPort(hostport); err == nil {
-			return parsedHost
-		}
-	}
-	if strings.Count(hostport, ":") == 1 {
-		if parsedHost, _, err := net.SplitHostPort(hostport); err == nil {
-			return parsedHost
-		}
-	}
-	return hostport
 }
 
 func StatusCode(code int) typev3.StatusCode {

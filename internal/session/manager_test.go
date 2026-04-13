@@ -93,6 +93,94 @@ func TestEnsureFreshInvalidGrantDeletesSession(t *testing.T) {
 	}
 }
 
+// TestEnsureFreshClampsExpiryToOriginal verifies that after a token refresh the
+// session ExpiresAt is never extended beyond the original session's ExpiresAt.
+func TestEnsureFreshClampsExpiryToOriginal(t *testing.T) {
+	now := time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC)
+	cfg := testutil.BaseConfig(now)
+	// Session expires in 1 hour.
+	originalExpiry := now.Add(1 * time.Hour)
+
+	t.Run("refresh would extend expiry — clamped to original", func(t *testing.T) {
+		memStore := testutil.NewMemoryStore()
+		// New token set has access token expiring in 30 minutes and no refresh
+		// expiry, so sessionExpiry() would compute createdAt + MaxLifetime (12h),
+		// which is beyond originalExpiry.
+		fakeOIDC := &testutil.FakeOIDCClient{
+			RefreshToken: &oidc.TokenSet{
+				AccessToken:       "new-access-token",
+				RefreshToken:      "new-refresh-token",
+				IDToken:           "new-id-token",
+				TokenType:         "Bearer",
+				AccessTokenExpiry: now.Add(30 * time.Minute),
+			},
+		}
+		clk := testutil.NewFixedClock(now)
+		manager := NewManager(cfg, memStore, fakeOIDC, testutil.DiscardLogger(), clk, telemetry.New())
+
+		original := model.Session{
+			ID:                "session-extend",
+			AccessToken:       "old-access-token",
+			RefreshToken:      "refresh-token",
+			IDToken:           "id-token",
+			TokenType:         "Bearer",
+			AccessTokenExpiry: now.Add(30 * time.Second),
+			CreatedAt:         now,
+			ExpiresAt:         originalExpiry,
+		}
+		if err := memStore.SaveSession(context.Background(), original, original.TTL(now)); err != nil {
+			t.Fatalf("save session: %v", err)
+		}
+
+		got, err := manager.EnsureFresh(context.Background(), &original)
+		if err != nil {
+			t.Fatalf("EnsureFresh() error = %v", err)
+		}
+		if !got.ExpiresAt.Equal(originalExpiry) {
+			t.Fatalf("ExpiresAt = %v, want clamped to original %v", got.ExpiresAt, originalExpiry)
+		}
+	})
+
+	t.Run("refresh produces shorter expiry — shorter value kept", func(t *testing.T) {
+		memStore := testutil.NewMemoryStore()
+		shorterExpiry := now.Add(10 * time.Minute)
+		fakeOIDC := &testutil.FakeOIDCClient{
+			RefreshToken: &oidc.TokenSet{
+				AccessToken:       "new-access-token",
+				RefreshToken:      "new-refresh-token",
+				IDToken:           "new-id-token",
+				TokenType:         "Bearer",
+				AccessTokenExpiry: now.Add(30 * time.Minute),
+				RefreshTokenExpiry: func() *time.Time { t := shorterExpiry; return &t }(),
+			},
+		}
+		clk := testutil.NewFixedClock(now)
+		manager := NewManager(cfg, memStore, fakeOIDC, testutil.DiscardLogger(), clk, telemetry.New())
+
+		original := model.Session{
+			ID:                "session-shorter",
+			AccessToken:       "old-access-token",
+			RefreshToken:      "refresh-token",
+			IDToken:           "id-token",
+			TokenType:         "Bearer",
+			AccessTokenExpiry: now.Add(30 * time.Second),
+			CreatedAt:         now,
+			ExpiresAt:         originalExpiry,
+		}
+		if err := memStore.SaveSession(context.Background(), original, original.TTL(now)); err != nil {
+			t.Fatalf("save session: %v", err)
+		}
+
+		got, err := manager.EnsureFresh(context.Background(), &original)
+		if err != nil {
+			t.Fatalf("EnsureFresh() error = %v", err)
+		}
+		if !got.ExpiresAt.Equal(shorterExpiry) {
+			t.Fatalf("ExpiresAt = %v, want shorter expiry %v", got.ExpiresAt, shorterExpiry)
+		}
+	})
+}
+
 func TestLogoutDeletesSessionsByKCSessionID(t *testing.T) {
 	now := time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC)
 	cfg := testutil.BaseConfig(now)

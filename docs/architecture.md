@@ -125,10 +125,47 @@ No Keycloak call is made on the normal request path.
 - `HttpOnly`, `Secure`, `SameSite=Lax` by default
 - backchannel logout token verification before local session deletion
 
+## Security Hardening
+
+### Rate Limiting
+
+Every `/_auth/*` endpoint (login, callback, logout, backchannel-logout) is
+protected by a per-IP token-bucket rate limiter. The defaults are 10 rps with a
+burst of 20. Configure with:
+
+- `RATE_LIMIT_RPS` – requests per second per IP (set to `0` to disable).
+- `RATE_LIMIT_BURST` – maximum burst size.
+
+Stale per-IP entries are evicted after 5 minutes of inactivity to keep memory
+bounded.
+
+### CSRF Protection on POST Logout
+
+POST requests to `/_auth/logout` are checked for the `Origin` header. If the
+header is present and the host does not match `SESSION_ALLOWED_HOSTS`, the
+request is rejected with `403 Forbidden`. GET logout is unaffected (browsers
+do not send `Origin` on navigation). API clients that omit `Origin` on POST
+are also unaffected.
+
+### Circuit Breaker for Keycloak
+
+All HTTP calls to Keycloak (token exchange, refresh, discovery) are protected
+by a three-state circuit breaker (closed → open → half-open). Configure with:
+
+- `OIDC_CB_MAX_FAILURES` – consecutive failures before opening (default `5`; set to `0` to disable).
+- `OIDC_CB_TIMEOUT` – how long the circuit stays open before a probe is allowed (default `30s`).
+
+When the circuit is open, login and token refresh fail fast without hammering a
+down Keycloak. The session manager's `CanServe` fallback keeps existing
+sessions serving traffic during a brief Keycloak outage.
+
+### TLS Insecure Skip Verify Warning
+
+If `REDIS_TLS_INSECURE_SKIP_VERIFY=true` is set, the service logs a `WARN`
+message at startup. This setting should not be used in production.
+
 ## Still To Harden
 
-- add explicit rate limiting on `/_auth/*` endpoints
-- add optional circuit breaking and retries for Keycloak HTTP client with tighter error taxonomy
 - add mTLS client auth to Redis if required by policy
 - add stricter egress `NetworkPolicy`/`ServiceEntry` generation for known Keycloak endpoints
 - add chaos and load tests against a real Keycloak and real Redis Sentinel cluster

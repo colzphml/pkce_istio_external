@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/colzphml/pkce_istio_external/internal/config"
+	"github.com/colzphml/pkce_istio_external/internal/netutil"
 	"github.com/colzphml/pkce_istio_external/internal/session"
 	"github.com/colzphml/pkce_istio_external/internal/telemetry"
 	"github.com/colzphml/pkce_istio_external/internal/version"
@@ -35,12 +37,25 @@ func New(addr string, manager *session.Manager, cfg config.Config, logger *slog.
 		metrics: metrics,
 	}
 
+	// Build the per-IP rate limiter for /_auth/* endpoints.
+	// When RateLimitRPS is 0 (or negative) rate limiting is disabled.
+	var rl *rateLimiter
+	if cfg.Server.RateLimitRPS > 0 {
+		rl = newRateLimiter(cfg.Server.RateLimitRPS, cfg.Server.RateLimitBurst, metrics)
+	}
+	rateLimit := func(route string, h http.Handler) http.Handler {
+		if rl == nil {
+			return h
+		}
+		return rl.Middleware(route, h)
+	}
+
 	router := chi.NewRouter()
-	router.Get(cfg.OIDC.LoginPath, metrics.InstrumentHTTP("login", http.HandlerFunc(s.handleLogin)).ServeHTTP)
-	router.Get(cfg.OIDC.CallbackPath, metrics.InstrumentHTTP("callback", http.HandlerFunc(s.handleCallback)).ServeHTTP)
-	router.MethodFunc(http.MethodGet, cfg.OIDC.LogoutPath, s.handleLogout)
-	router.MethodFunc(http.MethodPost, cfg.OIDC.LogoutPath, s.handleLogout)
-	router.Post(cfg.OIDC.BackchannelPath, metrics.InstrumentHTTP("backchannel_logout", http.HandlerFunc(s.handleBackchannelLogout)).ServeHTTP)
+	router.Get(cfg.OIDC.LoginPath, rateLimit("login", metrics.InstrumentHTTP("login", http.HandlerFunc(s.handleLogin))).ServeHTTP)
+	router.Get(cfg.OIDC.CallbackPath, rateLimit("callback", metrics.InstrumentHTTP("callback", http.HandlerFunc(s.handleCallback))).ServeHTTP)
+	router.MethodFunc(http.MethodGet, cfg.OIDC.LogoutPath, rateLimit("logout", http.HandlerFunc(s.handleLogout)).ServeHTTP)
+	router.MethodFunc(http.MethodPost, cfg.OIDC.LogoutPath, rateLimit("logout", http.HandlerFunc(s.handleLogout)).ServeHTTP)
+	router.Post(cfg.OIDC.BackchannelPath, rateLimit("backchannel_logout", metrics.InstrumentHTTP("backchannel_logout", http.HandlerFunc(s.handleBackchannelLogout))).ServeHTTP)
 	router.Get("/healthz", metrics.InstrumentHTTP("healthz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -130,6 +145,19 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// CSRF protection for POST logout: verify that the Origin header (when present)
+	// belongs to an allowed host. GET requests are not subject to this check because
+	// browsers do not send Origin on plain navigation. If Origin is absent on POST
+	// we still allow the request for API clients that may omit the header.
+	if r.Method == http.MethodPost {
+		if originHeader := strings.TrimSpace(r.Header.Get("Origin")); originHeader != "" {
+			if !originAllowed(originHeader, s.cfg) {
+				http.Error(w, "cross-origin logout not allowed", http.StatusForbidden)
+				return
+			}
+		}
+	}
+
 	origin, err := originFromRequest(r, s.cfg)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
@@ -171,17 +199,40 @@ func (s *Server) handleBackchannelLogout(w http.ResponseWriter, r *http.Request)
 	_, _ = fmt.Fprintf(w, `{"deleted_sessions":%d}`, deleted)
 }
 
+// originAllowed reports whether the raw Origin header value (e.g.
+// "https://app.example.com") refers to a host in cfg.Session.AllowedHosts.
+func originAllowed(rawOrigin string, cfg config.Config) bool {
+	parsed, err := url.Parse(rawOrigin)
+	if err != nil {
+		return false
+	}
+	host := netutil.HostOnly(parsed.Host)
+	if host == "" {
+		return false
+	}
+	if len(cfg.Session.AllowedHosts) == 0 {
+		return true
+	}
+	for _, item := range cfg.Session.AllowedHosts {
+		item = netutil.HostOnly(item)
+		if item == host || (strings.HasPrefix(item, "*.") && strings.HasSuffix(host, strings.TrimPrefix(item, "*"))) {
+			return true
+		}
+	}
+	return false
+}
+
 func originFromRequest(r *http.Request, cfg config.Config) (string, error) {
 	scheme := headerOrDefault(r.Header, "X-Forwarded-Proto", "http")
 	host := headerOrDefault(r.Header, "X-Forwarded-Host", r.Host)
-	host = hostOnly(host)
+	host = netutil.HostOnly(host)
 	if host == "" {
 		return "", errors.New("missing host")
 	}
 
 	allowed := len(cfg.Session.AllowedHosts) == 0
 	for _, item := range cfg.Session.AllowedHosts {
-		item = hostOnly(item)
+		item = netutil.HostOnly(item)
 		if item == host || (strings.HasPrefix(item, "*.") && strings.HasSuffix(host, strings.TrimPrefix(item, "*"))) {
 			allowed = true
 			break
@@ -215,17 +266,3 @@ func headerOrDefault(headers http.Header, key, fallback string) string {
 	return value
 }
 
-func hostOnly(hostport string) string {
-	hostport = strings.TrimSpace(strings.Split(hostport, ",")[0])
-	if strings.HasPrefix(hostport, "[") {
-		if parsedHost, _, err := net.SplitHostPort(hostport); err == nil {
-			return parsedHost
-		}
-	}
-	if strings.Count(hostport, ":") == 1 {
-		if parsedHost, _, err := net.SplitHostPort(hostport); err == nil {
-			return parsedHost
-		}
-	}
-	return hostport
-}

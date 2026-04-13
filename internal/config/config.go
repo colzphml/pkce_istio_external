@@ -31,6 +31,11 @@ type ServerConfig struct {
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
+	// RateLimitRPS controls the per-IP request rate for /_auth/* endpoints.
+	// Set to 0 to disable rate limiting. Default: 10.
+	RateLimitRPS float64
+	// RateLimitBurst controls the burst size for the per-IP rate limiter. Default: 20.
+	RateLimitBurst int
 }
 
 type OIDCConfig struct {
@@ -48,6 +53,12 @@ type OIDCConfig struct {
 	HTTPTimeout          time.Duration
 	ClockSkew            time.Duration
 	AccessTokenAudiences []string
+	// CircuitBreakerMaxFailures is the number of consecutive failures before the
+	// circuit breaker opens. Set to 0 to disable. Default: 5.
+	CircuitBreakerMaxFailures int
+	// CircuitBreakerTimeout is how long the circuit stays open before attempting
+	// half-open. Default: 30s.
+	CircuitBreakerTimeout time.Duration
 }
 
 type RedisConfig struct {
@@ -95,7 +106,71 @@ type HeaderConfig struct {
 	GroupsHeader            string
 }
 
+// configBuilder accumulates errors from env parsing so that all problems are
+// reported at once instead of panicking on the first bad value.
+type configBuilder struct {
+	errs []error
+}
+
+func (b *configBuilder) duration(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		b.errs = append(b.errs, fmt.Errorf("invalid duration for %s=%q: %w", key, value, err))
+		return fallback
+	}
+	return parsed
+}
+
+func (b *configBuilder) boolean(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		b.errs = append(b.errs, fmt.Errorf("invalid bool for %s=%q: %w", key, value, err))
+		return fallback
+	}
+	return parsed
+}
+
+func (b *configBuilder) integer(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		b.errs = append(b.errs, fmt.Errorf("invalid int for %s=%q: %w", key, value, err))
+		return fallback
+	}
+	return parsed
+}
+
+func (b *configBuilder) float64Val(key string, fallback float64) float64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		b.errs = append(b.errs, fmt.Errorf("invalid float for %s=%q: %w", key, value, err))
+		return fallback
+	}
+	return parsed
+}
+
+func (b *configBuilder) err() error {
+	return errors.Join(b.errs...)
+}
+
 func LoadFromEnv() (Config, error) {
+	var b configBuilder
+
 	cfg := Config{
 		Log: LogConfig{
 			Level: envString("LOG_LEVEL", "info"),
@@ -103,26 +178,30 @@ func LoadFromEnv() (Config, error) {
 		Server: ServerConfig{
 			HTTPAddr:        envString("SERVER_HTTP_ADDR", ":8080"),
 			GRPCAddr:        envString("SERVER_GRPC_ADDR", ":9090"),
-			ReadTimeout:     envDuration("SERVER_READ_TIMEOUT", 15*time.Second),
-			WriteTimeout:    envDuration("SERVER_WRITE_TIMEOUT", 15*time.Second),
-			IdleTimeout:     envDuration("SERVER_IDLE_TIMEOUT", 60*time.Second),
-			ShutdownTimeout: envDuration("SERVER_SHUTDOWN_TIMEOUT", 20*time.Second),
+			ReadTimeout:     b.duration("SERVER_READ_TIMEOUT", 15*time.Second),
+			WriteTimeout:    b.duration("SERVER_WRITE_TIMEOUT", 15*time.Second),
+			IdleTimeout:     b.duration("SERVER_IDLE_TIMEOUT", 60*time.Second),
+			ShutdownTimeout: b.duration("SERVER_SHUTDOWN_TIMEOUT", 20*time.Second),
+			RateLimitRPS:    b.float64Val("RATE_LIMIT_RPS", 10),
+			RateLimitBurst:  b.integer("RATE_LIMIT_BURST", 20),
 		},
 		OIDC: OIDCConfig{
-			IssuerURL:            envRequired("OIDC_ISSUER_URL"),
-			ClientID:             envRequired("OIDC_CLIENT_ID"),
-			ClientSecret:         envRequired("OIDC_CLIENT_SECRET"),
-			Scopes:               envCSV("OIDC_SCOPES", []string{"openid", "profile", "email", "offline_access"}),
-			CallbackPath:         envString("OIDC_CALLBACK_PATH", "/_auth/callback"),
-			LogoutPath:           envString("OIDC_LOGOUT_PATH", "/_auth/logout"),
-			PostLogoutPath:       envString("OIDC_POST_LOGOUT_PATH", "/"),
-			BackchannelPath:      envString("OIDC_BACKCHANNEL_LOGOUT_PATH", "/_auth/backchannel-logout"),
-			LoginPath:            envString("OIDC_LOGIN_PATH", "/_auth/login"),
-			LoginStateTTL:        envDuration("OIDC_LOGIN_STATE_TTL", 10*time.Minute),
-			RefreshWindow:        envDuration("OIDC_REFRESH_WINDOW", 2*time.Minute),
-			HTTPTimeout:          envDuration("OIDC_HTTP_TIMEOUT", 5*time.Second),
-			ClockSkew:            envDuration("OIDC_CLOCK_SKEW", 30*time.Second),
-			AccessTokenAudiences: envCSV("OIDC_ACCESS_TOKEN_AUDIENCES", nil),
+			IssuerURL:                 envRequired("OIDC_ISSUER_URL"),
+			ClientID:                  envRequired("OIDC_CLIENT_ID"),
+			ClientSecret:              envRequired("OIDC_CLIENT_SECRET"),
+			Scopes:                    envCSV("OIDC_SCOPES", []string{"openid", "profile", "email", "offline_access"}),
+			CallbackPath:              envString("OIDC_CALLBACK_PATH", "/_auth/callback"),
+			LogoutPath:                envString("OIDC_LOGOUT_PATH", "/_auth/logout"),
+			PostLogoutPath:            envString("OIDC_POST_LOGOUT_PATH", "/"),
+			BackchannelPath:           envString("OIDC_BACKCHANNEL_LOGOUT_PATH", "/_auth/backchannel-logout"),
+			LoginPath:                 envString("OIDC_LOGIN_PATH", "/_auth/login"),
+			LoginStateTTL:             b.duration("OIDC_LOGIN_STATE_TTL", 10*time.Minute),
+			RefreshWindow:             b.duration("OIDC_REFRESH_WINDOW", 2*time.Minute),
+			HTTPTimeout:               b.duration("OIDC_HTTP_TIMEOUT", 5*time.Second),
+			ClockSkew:                 b.duration("OIDC_CLOCK_SKEW", 30*time.Second),
+			AccessTokenAudiences:      envCSV("OIDC_ACCESS_TOKEN_AUDIENCES", nil),
+			CircuitBreakerMaxFailures: b.integer("OIDC_CB_MAX_FAILURES", 5),
+			CircuitBreakerTimeout:     b.duration("OIDC_CB_TIMEOUT", 30*time.Second),
 		},
 		Redis: RedisConfig{
 			Mode:             envString("REDIS_MODE", "standalone"),
@@ -132,30 +211,30 @@ func LoadFromEnv() (Config, error) {
 			Password:         envString("REDIS_PASSWORD", ""),
 			SentinelUsername: envString("REDIS_SENTINEL_USERNAME", ""),
 			SentinelPassword: envString("REDIS_SENTINEL_PASSWORD", ""),
-			DB:               envInt("REDIS_DB", 0),
+			DB:               b.integer("REDIS_DB", 0),
 			KeyPrefix:        envString("REDIS_KEY_PREFIX", "oidc:"),
-			DialTimeout:      envDuration("REDIS_DIAL_TIMEOUT", 2*time.Second),
-			ReadTimeout:      envDuration("REDIS_READ_TIMEOUT", 2*time.Second),
-			WriteTimeout:     envDuration("REDIS_WRITE_TIMEOUT", 2*time.Second),
-			PoolSize:         envInt("REDIS_POOL_SIZE", 64),
-			MinIdleConns:     envInt("REDIS_MIN_IDLE_CONNS", 16),
-			TLSEnabled:       envBool("REDIS_TLS_ENABLED", false),
+			DialTimeout:      b.duration("REDIS_DIAL_TIMEOUT", 2*time.Second),
+			ReadTimeout:      b.duration("REDIS_READ_TIMEOUT", 2*time.Second),
+			WriteTimeout:     b.duration("REDIS_WRITE_TIMEOUT", 2*time.Second),
+			PoolSize:         b.integer("REDIS_POOL_SIZE", 64),
+			MinIdleConns:     b.integer("REDIS_MIN_IDLE_CONNS", 16),
+			TLSEnabled:       b.boolean("REDIS_TLS_ENABLED", false),
 			TLSServerName:    envString("REDIS_TLS_SERVER_NAME", ""),
-			TLSInsecureSkip:  envBool("REDIS_TLS_INSECURE_SKIP_VERIFY", false),
+			TLSInsecureSkip:  b.boolean("REDIS_TLS_INSECURE_SKIP_VERIFY", false),
 			TLSCAFile:        envString("REDIS_TLS_CA_FILE", ""),
 			TLSCertFile:      envString("REDIS_TLS_CERT_FILE", ""),
 			TLSKeyFile:       envString("REDIS_TLS_KEY_FILE", ""),
-			LockRefreshTTL:   envDuration("REDIS_REFRESH_LOCK_TTL", 15*time.Second),
-			LockWaitTimeout:  envDuration("REDIS_REFRESH_LOCK_WAIT_TIMEOUT", 2*time.Second),
-			LockPollInterval: envDuration("REDIS_REFRESH_LOCK_POLL_INTERVAL", 50*time.Millisecond),
+			LockRefreshTTL:   b.duration("REDIS_REFRESH_LOCK_TTL", 15*time.Second),
+			LockWaitTimeout:  b.duration("REDIS_REFRESH_LOCK_WAIT_TIMEOUT", 2*time.Second),
+			LockPollInterval: b.duration("REDIS_REFRESH_LOCK_POLL_INTERVAL", 50*time.Millisecond),
 		},
 		Session: SessionConfig{
 			CookieName:        envString("SESSION_COOKIE_NAME", "__Host-oidc_session"),
 			CookieDomain:      envString("SESSION_COOKIE_DOMAIN", ""),
-			CookieSecure:      envBool("SESSION_COOKIE_SECURE", true),
+			CookieSecure:      b.boolean("SESSION_COOKIE_SECURE", true),
 			CookieSameSite:    envString("SESSION_COOKIE_SAMESITE", "Lax"),
-			MaxLifetime:       envDuration("SESSION_MAX_LIFETIME", 12*time.Hour),
-			MinAccessTokenTTL: envDuration("SESSION_MIN_ACCESS_TOKEN_TTL", 10*time.Second),
+			MaxLifetime:       b.duration("SESSION_MAX_LIFETIME", 12*time.Hour),
+			MinAccessTokenTTL: b.duration("SESSION_MIN_ACCESS_TOKEN_TTL", 10*time.Second),
 			AllowedHosts:      envCSV("SESSION_ALLOWED_HOSTS", nil),
 		},
 		Headers: HeaderConfig{
@@ -166,6 +245,10 @@ func LoadFromEnv() (Config, error) {
 			PreferredUsernameHeader: envString("AUTHZ_PREFERRED_USERNAME_HEADER", "x-auth-request-preferred-username"),
 			GroupsHeader:            envString("AUTHZ_GROUPS_HEADER", "x-auth-request-groups"),
 		},
+	}
+
+	if parseErr := b.err(); parseErr != nil {
+		return Config{}, fmt.Errorf("config parse error: %w", parseErr)
 	}
 
 	if len(cfg.OIDC.AccessTokenAudiences) == 0 && cfg.OIDC.ClientID != "" {
@@ -194,9 +277,6 @@ func (c Config) Validate() error {
 	if len(c.Redis.Addresses) == 0 {
 		errs = append(errs, errors.New("REDIS_ADDRESSES must not be empty"))
 	}
-	if c.Session.CookieSecure && !strings.HasPrefix(c.Session.CookieName, "__Host-") && c.Session.CookieDomain == "" {
-		// no-op, __Host- is recommended but not strictly required
-	}
 	if strings.HasPrefix(c.Session.CookieName, "__Host-") && c.Session.CookieDomain != "" {
 		errs = append(errs, errors.New("SESSION_COOKIE_DOMAIN must be empty when SESSION_COOKIE_NAME uses __Host- prefix"))
 	}
@@ -213,6 +293,16 @@ func (c Config) Validate() error {
 	return errors.Join(errs...)
 }
 
+// Warnings returns a list of non-fatal configuration warnings that should be
+// logged at startup.
+func (c Config) Warnings() []string {
+	var warnings []string
+	if c.Redis.TLSEnabled && c.Redis.TLSInsecureSkip {
+		warnings = append(warnings, "REDIS_TLS_INSECURE_SKIP_VERIFY is enabled: TLS certificate verification is disabled; do not use in production")
+	}
+	return warnings
+}
+
 func (c RedisConfig) TLSConfig() (*tls.Config, error) {
 	if !c.TLSEnabled {
 		return nil, nil
@@ -221,7 +311,7 @@ func (c RedisConfig) TLSConfig() (*tls.Config, error) {
 	tlsCfg := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         c.TLSServerName,
-		InsecureSkipVerify: c.TLSInsecureSkip,
+		InsecureSkipVerify: c.TLSInsecureSkip, //nolint:gosec // intentional opt-in, warned at startup
 	}
 
 	if c.TLSCAFile != "" {
@@ -281,40 +371,4 @@ func envCSV(key string, fallback []string) []string {
 		out = append(out, part)
 	}
 	return out
-}
-
-func envDuration(key string, fallback time.Duration) time.Duration {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		panic(fmt.Sprintf("invalid duration for %s: %v", key, err))
-	}
-	return parsed
-}
-
-func envBool(key string, fallback bool) bool {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		panic(fmt.Sprintf("invalid bool for %s: %v", key, err))
-	}
-	return parsed
-}
-
-func envInt(key string, fallback int) int {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		panic(fmt.Sprintf("invalid int for %s: %v", key, err))
-	}
-	return parsed
 }

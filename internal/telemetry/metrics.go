@@ -18,6 +18,7 @@ type Metrics struct {
 	LoginTotal          *prometheus.CounterVec
 	LogoutTotal         *prometheus.CounterVec
 	BackchannelTotal    *prometheus.CounterVec
+	RateLimitedTotal    *prometheus.CounterVec
 }
 
 func New() *Metrics {
@@ -66,6 +67,11 @@ func New() *Metrics {
 			Name:      "backchannel_logout_total",
 			Help:      "Backchannel logout events by outcome.",
 		}, []string{"result"}),
+		RateLimitedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "oidc_auth",
+			Name:      "rate_limited_total",
+			Help:      "Total number of requests rejected by the per-IP rate limiter on /_auth/* endpoints.",
+		}, []string{"route"}),
 	}
 
 	registry.MustRegister(
@@ -77,6 +83,7 @@ func New() *Metrics {
 		m.LoginTotal,
 		m.LogoutTotal,
 		m.BackchannelTotal,
+		m.RateLimitedTotal,
 	)
 
 	return m
