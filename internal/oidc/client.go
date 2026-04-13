@@ -381,24 +381,34 @@ func tokenSetFromOAuth2(token *oauth2.Token) (*TokenSet, string, error) {
 		AccessTokenExpiry: token.Expiry,
 	}
 
-	if rawRefreshTTL := token.Extra("refresh_expires_in"); rawRefreshTTL != nil {
-		switch value := rawRefreshTTL.(type) {
-		case float64:
-			expiry := time.Now().Add(time.Duration(value) * time.Second)
-			set.RefreshTokenExpiry = &expiry
-		case int64:
-			expiry := time.Now().Add(time.Duration(value) * time.Second)
-			set.RefreshTokenExpiry = &expiry
-		case json.Number:
-			seconds, err := value.Int64()
-			if err == nil {
-				expiry := time.Now().Add(time.Duration(seconds) * time.Second)
-				set.RefreshTokenExpiry = &expiry
-			}
-		}
+	if expiry := refreshTokenExpiry(token.Extra("refresh_expires_in"), time.Now()); expiry != nil {
+		set.RefreshTokenExpiry = expiry
 	}
 
 	return set, rawIDToken, nil
+}
+
+func refreshTokenExpiry(raw any, now time.Time) *time.Time {
+	switch value := raw.(type) {
+	case float64:
+		return refreshTokenExpirySeconds(int64(value), now)
+	case int64:
+		return refreshTokenExpirySeconds(value, now)
+	case json.Number:
+		seconds, err := value.Int64()
+		if err == nil {
+			return refreshTokenExpirySeconds(seconds, now)
+		}
+	}
+	return nil
+}
+
+func refreshTokenExpirySeconds(seconds int64, now time.Time) *time.Time {
+	if seconds <= 0 {
+		return nil
+	}
+	expiry := now.Add(time.Duration(seconds) * time.Second)
+	return &expiry
 }
 
 func audienceAllowed(got, allowed []string) bool {
